@@ -3247,12 +3247,12 @@
     async function flushPush() {
       if (!client || !user || (!dirty.size && !deleted.size)) return;
       const upserts = [...dirty].map(k => ({
-        key: k, value: tryParse(localStorage.getItem(k)), updated_at: new Date().toISOString()
+        user_id: user.id, key: k, value: tryParse(localStorage.getItem(k)), updated_at: new Date().toISOString()
       })).filter(r => r.value !== null);
       const dels = [...deleted];
       dirty.clear(); deleted.clear();
       try {
-        if (upserts.length) await client.from(TABLE).upsert(upserts);
+        if (upserts.length) await client.from(TABLE).upsert(upserts, { onConflict: 'user_id,key' });
         if (dels.length)    await client.from(TABLE).delete().in('key', dels);
         setStatus('Synced ✓');
       } catch (e) { setStatus('Sync error', true); console.warn('[sync] push failed', e); }
@@ -3265,12 +3265,42 @@
       finally { applyingRemote = false; }
     }
 
-    // Pull the whole cloud state down into localStorage. Returns row count.
-    async function pullAll() {
+    // Pull cloud state into localStorage, applying only values that actually changed.
+    // Returns { count, changed }.
+    async function syncDown() {
       const { data, error } = await client.from(TABLE).select('key,value');
       if (error) throw error;
-      (data || []).forEach(r => { if (isAppKey(r.key)) applyRemote(r.key, r.value); });
-      return (data || []).length;
+      let changed = false;
+      (data || []).forEach(r => {
+        if (!isAppKey(r.key)) return;
+        const incoming = stableStringify(r.value);
+        const current  = stableStringify(tryParse(localStorage.getItem(r.key)));
+        if (incoming !== current) { applyRemote(r.key, r.value); changed = true; }
+      });
+      return { count: (data || []).length, changed };
+    }
+
+    // Safety net: realtime can silently miss events (RLS, dropped sockets), so also
+    // re-pull whenever the tab regains focus/visibility. Reload only if something changed.
+    let focusSyncing = false;
+    async function syncDownAndRefresh() {
+      if (!client || !user || focusSyncing) return;
+      focusSyncing = true;
+      try {
+        const { changed } = await syncDown();
+        if (changed) {
+          const el = document.activeElement;
+          if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+          location.reload();
+        }
+      } catch (e) { console.warn('[sync] focus pull failed', e); }
+      finally { focusSyncing = false; }
+    }
+    function registerFocusSync() {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') syncDownAndRefresh();
+      });
+      window.addEventListener('focus', syncDownAndRefresh);
     }
 
     // Push every current localStorage app key up (used on first sign-in of a device
@@ -3279,9 +3309,9 @@
       const rows = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
-        if (isAppKey(k)) rows.push({ key: k, value: tryParse(localStorage.getItem(k)), updated_at: new Date().toISOString() });
+        if (isAppKey(k)) rows.push({ user_id: user.id, key: k, value: tryParse(localStorage.getItem(k)), updated_at: new Date().toISOString() });
       }
-      if (rows.length) await client.from(TABLE).upsert(rows);
+      if (rows.length) await client.from(TABLE).upsert(rows, { onConflict: 'user_id,key' });
     }
 
     function subscribeRealtime() {
@@ -3322,9 +3352,11 @@
       const { data: { session } } = await client.auth.getSession();
       if (session) {
         user = session.user;
-        try { await pullAll(); } catch (e) { console.warn('[sync] pull failed', e); }
+        client.realtime.setAuth(session.access_token); // required for realtime on an RLS table
+        try { await syncDown(); } catch (e) { console.warn('[sync] pull failed', e); }
         ready = true;
         subscribeRealtime();
+        registerFocusSync();
         renderAuth();
         setStatus('Synced ✓');
       }
@@ -3332,8 +3364,10 @@
 
     // After a fresh sign-in we must re-render from the just-pulled data → reload once.
     async function afterSignIn() {
-      user = (await client.auth.getSession()).data.session.user;
-      const count = await pullAll();
+      const sess = (await client.auth.getSession()).data.session;
+      user = sess.user;
+      client.realtime.setAuth(sess.access_token);
+      const { count } = await syncDown();
       if (count === 0) await pushEverything(); // seed empty cloud with this device's data
       ready = true;
       location.reload();
