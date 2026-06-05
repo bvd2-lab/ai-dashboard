@@ -3205,7 +3205,7 @@
     const SUPABASE_ANON_KEY = 'sb_publishable_0K0ZjL0qRKegvHq5xGAXdA_NsyVC87-';
 
     const TABLE = 'dashboard_state';
-    const SYNC_BUILD = 'build v6 · 2026-06-05'; // bump on each change so we can confirm fresh load
+    const SYNC_BUILD = 'build v7 · 2026-06-05'; // bump on each change so we can confirm fresh load
     const configured = SUPABASE_URL.startsWith('http') && !SUPABASE_ANON_KEY.startsWith('PASTE_');
 
     let client = null;
@@ -3236,6 +3236,24 @@
     const _removeItem = localStorage.removeItem.bind(localStorage);
     const baseline = new Map(); // appKey -> stableStringify(value) we believe is synced
 
+    // Remember values we just pushed so their realtime echoes are never mistaken for a
+    // remote edit — even after rapid successive changes to the same key (each value is
+    // tracked, not just the latest). Without this, toggling fast reverts your newest change.
+    const recentPush = new Map(); // "key stableValue" -> expiry ms
+    let lastLocalChangeAt = 0;    // when the user last changed something locally
+    function markPushed(k, stableVal) { recentPush.set(k + ' ' + stableVal, Date.now() + 15000); }
+    function wasRecentlyPushed(k, stableVal) {
+      const id = k + ' ' + stableVal, exp = recentPush.get(id);
+      if (exp && exp > Date.now()) return true;
+      if (exp) recentPush.delete(id);
+      return false;
+    }
+    function userBusy() {
+      const el = document.activeElement;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return true;
+      return Date.now() - lastLocalChangeAt < 6000; // recently toggled/edited → don't yank the page
+    }
+
     function rebuildBaseline() {
       baseline.clear();
       for (let i = 0; i < localStorage.length; i++) {
@@ -3254,10 +3272,10 @@
         if (!isAppKey(k)) continue;
         seen.add(k);
         const cur = stableStringify(tryParse(localStorage.getItem(k)));
-        if (baseline.get(k) !== cur) { dirty.add(k); deleted.delete(k); baseline.set(k, cur); }
+        if (baseline.get(k) !== cur) { dirty.add(k); deleted.delete(k); baseline.set(k, cur); lastLocalChangeAt = Date.now(); }
       }
       for (const k of [...baseline.keys()]) {
-        if (!seen.has(k)) { deleted.add(k); dirty.delete(k); baseline.delete(k); }
+        if (!seen.has(k)) { deleted.add(k); dirty.delete(k); baseline.delete(k); lastLocalChangeAt = Date.now(); }
       }
       if ((dirty.size || deleted.size) && !pushing) {
         pushing = true;
@@ -3269,6 +3287,7 @@
       const upserts = [...dirty].map(k => ({
         user_id: user.id, key: k, value: tryParse(localStorage.getItem(k)), updated_at: new Date().toISOString()
       })).filter(r => r.value !== null);
+      upserts.forEach(r => markPushed(r.key, stableStringify(r.value)));
       const dels = [...deleted];
       dirty.clear(); deleted.clear();
       try {
@@ -3319,15 +3338,11 @@
     // re-pull whenever the tab regains focus/visibility. Reload only if something changed.
     let focusSyncing = false;
     async function syncDownAndRefresh() {
-      if (!client || !user || focusSyncing) return;
+      if (!client || !user || focusSyncing || userBusy()) return; // don't pull over active edits
       focusSyncing = true;
       try {
         const { changed } = await syncDown();
-        if (changed) {
-          const el = document.activeElement;
-          if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
-          location.reload();
-        }
+        if (changed && !userBusy()) location.reload();
       } catch (e) { console.warn('[sync] focus pull failed', e); }
       finally { focusSyncing = false; }
     }
@@ -3375,16 +3390,16 @@
           } else if (payload.new && isAppKey(payload.new.key)) {
             const k = payload.new.key;
             const incoming = stableStringify(payload.new.value);
-            const current  = stableStringify(tryParse(localStorage.getItem(k)));
+            if (wasRecentlyPushed(k, incoming)) return; // our own echo (even after rapid edits)
+            const current = stableStringify(tryParse(localStorage.getItem(k)));
             if (incoming !== current) { applyRemote(k, payload.new.value); changed = true; }
           }
           // Only react to genuine changes from ANOTHER device — never our own echo.
           if (!changed) return;
-          // Reflect the incoming change in the UI — soft reload, but never while you're typing.
+          // Reflect the incoming change in the UI — soft reload, but wait until you're idle.
           clearTimeout(reloadTimer);
-          reloadTimer = setTimeout(() => {
-            const el = document.activeElement;
-            if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+          reloadTimer = setTimeout(function tryReload() {
+            if (userBusy()) { reloadTimer = setTimeout(tryReload, 3000); return; }
             location.reload();
           }, 1500);
         })
