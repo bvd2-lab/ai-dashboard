@@ -3205,7 +3205,7 @@
     const SUPABASE_ANON_KEY = 'sb_publishable_0K0ZjL0qRKegvHq5xGAXdA_NsyVC87-';
 
     const TABLE = 'dashboard_state';
-    const SYNC_BUILD = 'build v5 · 2026-06-05'; // bump on each change so we can confirm fresh load
+    const SYNC_BUILD = 'build v6 · 2026-06-05'; // bump on each change so we can confirm fresh load
     const configured = SUPABASE_URL.startsWith('http') && !SUPABASE_ANON_KEY.startsWith('PASTE_');
 
     let client = null;
@@ -3214,7 +3214,6 @@
     let applyingRemote = false; // true while writing remote data into localStorage (don't echo back)
     const dirty = new Set();    // app keys changed locally, waiting to be pushed
     const deleted = new Set();  // app keys removed locally, waiting to be deleted
-    let pushTimer = null;
     let reloadTimer = null;
 
     // Don't sync Supabase's own auth tokens or our private API key blob's secrets.
@@ -3230,21 +3229,40 @@
       return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + stableStringify(v[k])).join(',') + '}';
     }
 
-    // ── Wrap localStorage so EVERY write is captured, no matter where it happens ──
+    // iOS Safari silently ignores attempts to override localStorage.setItem, so we do
+    // NOT monkey-patch it. Instead we diff localStorage against a baseline snapshot and
+    // push whatever changed. This works identically on every browser.
     const _setItem    = localStorage.setItem.bind(localStorage);
     const _removeItem = localStorage.removeItem.bind(localStorage);
-    localStorage.setItem = function (k, v) {
-      _setItem(k, v);
-      if (ready && !applyingRemote && isAppKey(k)) { dirty.add(k); deleted.delete(k); schedulePush(); }
-    };
-    localStorage.removeItem = function (k) {
-      _removeItem(k);
-      if (ready && !applyingRemote && isAppKey(k)) { deleted.add(k); dirty.delete(k); schedulePush(); }
-    };
+    const baseline = new Map(); // appKey -> stableStringify(value) we believe is synced
 
-    function schedulePush() {
-      clearTimeout(pushTimer);
-      pushTimer = setTimeout(flushPush, 700);
+    function rebuildBaseline() {
+      baseline.clear();
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (isAppKey(k)) baseline.set(k, stableStringify(tryParse(localStorage.getItem(k))));
+      }
+    }
+
+    let pushing = false;
+    // Scan localStorage, queue anything that differs from the baseline, and push.
+    function scanAndPush() {
+      if (!ready || !user || applyingRemote) return;
+      const seen = new Set();
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!isAppKey(k)) continue;
+        seen.add(k);
+        const cur = stableStringify(tryParse(localStorage.getItem(k)));
+        if (baseline.get(k) !== cur) { dirty.add(k); deleted.delete(k); baseline.set(k, cur); }
+      }
+      for (const k of [...baseline.keys()]) {
+        if (!seen.has(k)) { deleted.add(k); dirty.delete(k); baseline.delete(k); }
+      }
+      if ((dirty.size || deleted.size) && !pushing) {
+        pushing = true;
+        flushPush().finally(() => { pushing = false; });
+      }
     }
     async function flushPush() {
       if (!client || !user || (!dirty.size && !deleted.size)) return;
@@ -3276,8 +3294,10 @@
     // Write a remote value into localStorage without re-queuing a push.
     function applyRemote(key, value) {
       applyingRemote = true;
-      try { _setItem(key, JSON.stringify(value)); }
-      finally { applyingRemote = false; }
+      try {
+        _setItem(key, JSON.stringify(value));
+        baseline.set(key, stableStringify(value)); // so scanAndPush won't echo it back up
+      } finally { applyingRemote = false; }
     }
 
     // Pull cloud state into localStorage, applying only values that actually changed.
@@ -3311,6 +3331,14 @@
       } catch (e) { console.warn('[sync] focus pull failed', e); }
       finally { focusSyncing = false; }
     }
+    // Diff-based push loop: catches local changes on every browser (incl. iOS Safari).
+    function startPushSync() {
+      rebuildBaseline();
+      setInterval(scanAndPush, 2000);
+      // Flush pending changes right before the tab is hidden/closed (iOS backgrounding).
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') scanAndPush(); });
+      window.addEventListener('pagehide', scanAndPush);
+    }
     function registerFocusSync() {
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') syncDownAndRefresh();
@@ -3341,7 +3369,7 @@
           if (payload.eventType === 'DELETE') {
             const k = payload.old.key;
             if (isAppKey(k) && localStorage.getItem(k) !== null) {
-              applyingRemote = true; try { _removeItem(k); } finally { applyingRemote = false; }
+              applyingRemote = true; try { _removeItem(k); baseline.delete(k); } finally { applyingRemote = false; }
               changed = true;
             }
           } else if (payload.new && isAppKey(payload.new.key)) {
@@ -3375,6 +3403,7 @@
         client.realtime.setAuth(session.access_token); // required for realtime on an RLS table
         try { await syncDown(); } catch (e) { console.warn('[sync] pull failed', e); }
         ready = true;
+        startPushSync();
         subscribeRealtime();
         registerFocusSync();
         renderAuth();
