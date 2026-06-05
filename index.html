@@ -71,17 +71,28 @@
   @keyframes viewFadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
   /* ── Page title ── */
+  .dash-title-row {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 24px; flex-wrap: wrap;
+    margin-top: 32px; margin-bottom: 14px;
+  }
   .dash-title {
     font-size: 28px;
     font-weight: 700;
     letter-spacing: -0.025em;
-    margin-bottom: 14px;
-    margin-top: 32px;
+    margin: 0;
     background: linear-gradient(180deg, #FFFFFF 0%, #C7C4BC 120%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
   }
+  .dash-title .dq-bvd { color: #FF4D4D; -webkit-text-fill-color: #FF4D4D; }
+  .daily-quote {
+    max-width: 340px; margin-left: auto; text-align: right;
+    font-style: italic; font-size: 13px; line-height: 1.5;
+    color: var(--text-secondary); padding-top: 6px;
+  }
+  .daily-quote .dq-author { display: block; font-style: normal; font-size: 11px; color: var(--text-tertiary); margin-top: 4px; }
 
   /* ── Goal Ticker ── */
   .ticker-row { margin-bottom: 18px; }
@@ -207,7 +218,7 @@
   .ring-hours { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); }
 
   /* ── Task ring (small) ── */
-  .task-ring-wrap { position: relative; width: 84px; height: 84px; flex-shrink: 0; }
+  .task-ring-wrap { position: relative; width: 106px; height: 106px; flex-shrink: 0; }
   .task-ring-wrap svg { width: 100%; height: 100%; }
   .task-ring-overlay {
     position: absolute; top: 0; left: 0; right: 0; bottom: 0;
@@ -215,9 +226,9 @@
     align-items: center; justify-content: center;
     pointer-events: none;
   }
-  .task-ring-pct { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1; transition: color 0.3s; }
-  .task-ring-label { font-family: var(--font-mono); font-size: 7.5px; font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-tertiary); margin-top: 4px; }
-  .task-ring-count { font-family: var(--font-mono); font-size: 9px; color: var(--text-tertiary); margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .task-ring-pct { font-size: 23px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; line-height: 1; transition: color 0.3s; }
+  .task-ring-label { font-family: var(--font-mono); font-size: 9px; font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-tertiary); margin-top: 5px; }
+  .task-ring-count { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); margin-top: 3px; font-variant-numeric: tabular-nums; }
 
   /* ── Section title ── */
   .section { margin-bottom: 24px; }
@@ -720,7 +731,10 @@
 <!-- ═══════════════════════════════ DASHBOARD VIEW ═══════════════════════════════ -->
 <div id="dashView" class="view">
 
-  <h1 class="dash-title" id="dashTitle">Briek's Dashboard</h1>
+  <div class="dash-title-row">
+    <h1 class="dash-title" id="dashTitle">Briek's Dashboard</h1>
+    <div class="daily-quote" id="dailyQuote"></div>
+  </div>
 
   <!-- Goal Ticker -->
   <div class="ticker-row">
@@ -1595,12 +1609,15 @@
   let tickerItems = [], cycleIdx = 0, tickerInterval = null;
 
   function buildTickerItems() {
-    const goals = storeGet('goals:' + getActiveDateString()) || [];
-    const total = goals.length, done = goals.filter(g => g.done).length;
+    const date   = getActiveDateString();
+    const goals  = storeGet('goals:' + date) || [];
+    const habits = storeGet('habits:' + date) || [];
+    const items  = [...habits, ...goals]; // daily habits + set goals
+    const total = items.length, done = items.filter(i => i.done).length;
     document.getElementById('goalTickerMeta').textContent = `${done}/${total}`;
-    if (total === 0) return [{ status: 'empty',   text: 'No goals set for today — add one to get rolling.' }];
-    if (done === total) return [{ status: 'done',  text: '✓ All goals done — solid day.' }];
-    return goals.filter(g => !g.done).map(g => ({ status: 'pending', text: g.text }));
+    if (total === 0) return [{ status: 'empty',   text: 'No goals or habits set for today — add some to get rolling.' }];
+    if (done === total) return [{ status: 'done',  text: '✓ All goals & habits done — solid day.' }];
+    return items.filter(i => !i.done).map(i => ({ status: 'pending', text: i.text }));
   }
 
   function tick(firstRender) {
@@ -1634,6 +1651,39 @@
   }
 
   window.addEventListener('goals-changed', () => { cycleIdx = 0; tick(false); updateTaskRing(); });
+
+  // ── Dashboard title (renders any "BVD" in red) ──
+  function setDashTitle(name) {
+    const esc = s => s.replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+    document.getElementById('dashTitle').innerHTML =
+      esc(name).replace(/BVD/gi, m => `<span class="dq-bvd">${m}</span>`);
+    document.title = name;
+  }
+
+  // ── Daily quote (stable for the day, rotates daily) ──
+  const DAILY_QUOTES = [
+    { q: 'Discipline is choosing between what you want now and what you want most.', a: 'Abraham Lincoln' },
+    { q: 'We are what we repeatedly do. Excellence, then, is not an act, but a habit.', a: 'Aristotle' },
+    { q: 'The successful warrior is the average man, with laser-like focus.', a: 'Bruce Lee' },
+    { q: 'It’s not whether you get knocked down, it’s whether you get up.', a: 'Vince Lombardi' },
+    { q: 'Hard work beats talent when talent doesn’t work hard.', a: 'Tim Notke' },
+    { q: 'The only way to prove that you’re a good sport is to lose.', a: 'Ernie Banks' },
+    { q: 'You miss 100% of the shots you don’t take.', a: 'Wayne Gretzky' },
+    { q: 'Champions keep playing until they get it right.', a: 'Billie Jean King' },
+    { q: 'Don’t count the days, make the days count.', a: 'Muhammad Ali' },
+    { q: 'Small disciplines repeated with consistency lead to great achievements.', a: 'John Maxwell' },
+    { q: 'The body achieves what the mind believes.', a: 'Napoleon Hill' },
+    { q: 'Success is the sum of small efforts repeated day in and day out.', a: 'Robert Collier' },
+    { q: 'Motivation gets you going, but discipline keeps you growing.', a: 'John Maxwell' },
+    { q: 'Energy and persistence conquer all things.', a: 'Benjamin Franklin' }
+  ];
+  function renderDailyQuote() {
+    const el = document.getElementById('dailyQuote');
+    if (!el) return;
+    const dayIndex = Math.floor((Date.now() - new Date().getTimezoneOffset() * 60000) / 86400000);
+    const pick = DAILY_QUOTES[dayIndex % DAILY_QUOTES.length];
+    el.innerHTML = `“${pick.q}”<span class="dq-author">— ${pick.a}</span>`;
+  }
 
   // ── Today header ──
   function renderTodayHeader() {
@@ -2108,8 +2158,7 @@
 
     wakeHour  = wake;
     sleepHour = sleep;
-    document.getElementById('dashTitle').textContent = name;
-    document.title = name;
+    setDashTitle(name);
     updateDayBar();
 
     const msg = document.getElementById('settingsSavedMsg');
@@ -3122,7 +3171,8 @@
   function init() {
     // Load saved config
     const cfg = storeGet('dashboard_config') || {};
-    if (cfg.name)               { document.getElementById('dashTitle').textContent = cfg.name; document.title = cfg.name; }
+    setDashTitle(cfg.name || "Briek's Dashboard");
+    renderDailyQuote();
     if (cfg.wakeHour  != null)  wakeHour  = cfg.wakeHour;
     if (cfg.sleepHour != null)  sleepHour = cfg.sleepHour;
 
@@ -3205,7 +3255,7 @@
     const SUPABASE_ANON_KEY = 'sb_publishable_0K0ZjL0qRKegvHq5xGAXdA_NsyVC87-';
 
     const TABLE = 'dashboard_state';
-    const SYNC_BUILD = 'build v7 · 2026-06-05'; // bump on each change so we can confirm fresh load
+    const SYNC_BUILD = 'build v8 · 2026-06-05'; // bump on each change so we can confirm fresh load
     const configured = SUPABASE_URL.startsWith('http') && !SUPABASE_ANON_KEY.startsWith('PASTE_');
 
     let client = null;
