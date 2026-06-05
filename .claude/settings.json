@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "Set-Location 'C:\\dev\\ai dashboard'; if (git status --porcelain) { git add -A; git commit -q -m 'Auto-commit: dashboard changes'; git push -q origin main; Write-Output '{\"systemMessage\":\"Auto-committed and pushed changes to GitHub.\"}' }",
+            "timeout": 45,
+            "statusMessage": "Auto-committing to GitHub..."
+          }
+        ]
+      }
+    ]
+  }
+}
