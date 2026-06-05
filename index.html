@@ -3252,9 +3252,22 @@
       const dels = [...deleted];
       dirty.clear(); deleted.clear();
       try {
-        if (upserts.length) await client.from(TABLE).upsert(upserts, { onConflict: 'user_id,key' });
-        if (dels.length)    await client.from(TABLE).delete().in('key', dels);
-        setStatus('Synced ✓');
+        if (upserts.length) {
+          // .select() returns the rows actually written. If RLS silently drops the
+          // write (stale token → auth.uid() doesn't match), it comes back empty with
+          // no error. In that case refresh the session and retry once.
+          let { data, error } = await client.from(TABLE).upsert(upserts, { onConflict: 'user_id,key' }).select();
+          if (!error && (data?.length || 0) === 0) {
+            await client.auth.refreshSession();
+            const fresh = (await client.auth.getSession()).data.session;
+            if (fresh) { user = fresh.user; client.realtime.setAuth(fresh.access_token); }
+            ({ data, error } = await client.from(TABLE).upsert(upserts, { onConflict: 'user_id,key' }).select());
+          }
+          if (error) throw error;
+          setStatus('Synced ✓ (' + (data?.length || 0) + ')');
+        }
+        if (dels.length) await client.from(TABLE).delete().in('key', dels);
+        if (!upserts.length) setStatus('Synced ✓');
       } catch (e) { setStatus('Sync error', true); console.warn('[sync] push failed', e); }
     }
 
