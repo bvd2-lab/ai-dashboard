@@ -3301,6 +3301,11 @@
         if (document.visibilityState === 'visible') syncDownAndRefresh();
       });
       window.addEventListener('focus', syncDownAndRefresh);
+      // Belt-and-suspenders: poll while visible so changes propagate even when both
+      // screens stay open (no focus event) or realtime drops a message.
+      setInterval(() => {
+        if (document.visibilityState === 'visible') syncDownAndRefresh();
+      }, 25000);
     }
 
     // Push every current localStorage app key up (used on first sign-in of a device
