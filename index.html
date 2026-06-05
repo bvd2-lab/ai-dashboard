@@ -3205,7 +3205,7 @@
     const SUPABASE_ANON_KEY = 'sb_publishable_0K0ZjL0qRKegvHq5xGAXdA_NsyVC87-';
 
     const TABLE = 'dashboard_state';
-    const SYNC_BUILD = 'build v4 · 2026-06-05'; // bump on each change so we can confirm fresh load
+    const SYNC_BUILD = 'build v5 · 2026-06-05'; // bump on each change so we can confirm fresh load
     const configured = SUPABASE_URL.startsWith('http') && !SUPABASE_ANON_KEY.startsWith('PASTE_');
 
     let client = null;
@@ -3219,7 +3219,7 @@
 
     // Don't sync Supabase's own auth tokens or our private API key blob's secrets.
     function isAppKey(k) {
-      return k && !k.startsWith('sb-') && k !== '__sync_meta';
+      return k && !k.startsWith('sb-') && !k.startsWith('__');
     }
     function tryParse(s) { try { return JSON.parse(s); } catch { return s; } }
     // Order-insensitive stringify so we can tell a real change from our own echo
@@ -3393,6 +3393,30 @@
       location.reload();
     }
 
+    // ── Live self-test: reports exactly what the sync can and can't do ──
+    async function runDiagnostics() {
+      const out = ['build: ' + SYNC_BUILD, 'configured: ' + configured, 'ready: ' + ready];
+      try {
+        const sess = client ? (await client.auth.getSession()).data.session : null;
+        out.push('signed in: ' + (sess ? sess.user.email : 'NO — not signed in on THIS browser'));
+        if (sess) {
+          out.push('user id: ' + sess.user.id.slice(0, 8) + '…');
+          client.realtime.setAuth(sess.access_token);
+          try {
+            const { data, error } = await client.from(TABLE)
+              .upsert([{ user_id: sess.user.id, key: '__diag', value: { t: Date.now() }, updated_at: new Date().toISOString() }], { onConflict: 'user_id,key' })
+              .select();
+            out.push('WRITE: ' + (error ? ('FAIL — ' + error.message) : ('ok, rows=' + (data?.length || 0))));
+          } catch (e) { out.push('WRITE: EXC — ' + e.message); }
+          try {
+            const { data, error } = await client.from(TABLE).select('key');
+            out.push('READ: ' + (error ? ('FAIL — ' + error.message) : ('ok, rows=' + (data?.length || 0))));
+          } catch (e) { out.push('READ: EXC — ' + e.message); }
+        }
+      } catch (e) { out.push('session error: ' + e.message); }
+      return out.join('\n');
+    }
+
     // ── Minimal auth + status UI (injected so it stays self-contained) ──
     let statusEl, panelEl;
     function setStatus(text, isErr) {
@@ -3418,8 +3442,15 @@
         panelEl.innerHTML =
           '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">Signed in as<br><b style="color:var(--text-primary)">' + user.email + '</b></div>' +
           '<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:12px">Your data syncs automatically across devices.</div>' +
+          '<button id="syncDiag" style="width:100%;padding:8px;margin-bottom:6px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:transparent;color:var(--text-secondary);cursor:pointer;font:inherit">Run diagnostics</button>' +
+          '<pre id="syncDiagOut" style="display:none;white-space:pre-wrap;font-size:11px;color:var(--text-secondary);background:rgba(0,0,0,0.3);padding:8px;border-radius:8px;margin-bottom:8px;"></pre>' +
           '<button id="syncSignOut" style="width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:transparent;color:var(--text-secondary);cursor:pointer;font:inherit">Sign out</button>';
         panelEl.querySelector('#syncSignOut').onclick = async () => { await client.auth.signOut(); location.reload(); };
+        panelEl.querySelector('#syncDiag').onclick = async () => {
+          const pre = panelEl.querySelector('#syncDiagOut');
+          pre.style.display = 'block'; pre.textContent = 'Running…';
+          pre.textContent = await runDiagnostics();
+        };
         return;
       }
       panelEl.innerHTML =
