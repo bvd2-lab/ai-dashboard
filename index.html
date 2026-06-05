@@ -1255,6 +1255,7 @@
     <div class="settings-card-title">Cloud Sync <span id="syncSettingsStatus" style="font-size:12px;font-weight:400;color:var(--text-tertiary);margin-left:8px;"></span></div>
     <div class="settings-card-desc">Sign in to sync your dashboard data across devices (desktop ↔ phone) in real time.</div>
     <div id="syncSettingsBody" style="margin-top:6px;max-width:340px;"></div>
+    <div id="syncBuild" style="font-size:11px;color:var(--text-tertiary);margin-top:8px;"></div>
   </div>
 
   <!-- Export / Import -->
@@ -3204,6 +3205,7 @@
     const SUPABASE_ANON_KEY = 'sb_publishable_0K0ZjL0qRKegvHq5xGAXdA_NsyVC87-';
 
     const TABLE = 'dashboard_state';
+    const SYNC_BUILD = 'build v4 · 2026-06-05'; // bump on each change so we can confirm fresh load
     const configured = SUPABASE_URL.startsWith('http') && !SUPABASE_ANON_KEY.startsWith('PASTE_');
 
     let client = null;
@@ -3401,6 +3403,8 @@
     function injectUI() {
       panelEl  = document.getElementById('syncSettingsBody');
       statusEl = document.getElementById('syncSettingsStatus');
+      const buildEl = document.getElementById('syncBuild');
+      if (buildEl) buildEl.textContent = SYNC_BUILD;
       if (statusEl) statusEl.textContent = configured ? '· Not signed in' : '· Not configured';
       renderAuth();
     }
